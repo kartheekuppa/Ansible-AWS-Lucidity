@@ -101,7 +101,7 @@
 
 ---
 
-## 5. Ansible Playbook Structure (What to Code)
+## 4. Ansible Playbook Structure (What to Code)
 
 ### File Layout
 ```
@@ -157,64 +157,7 @@ lucidity-disk-monitoring/
 
 ---
 
-## 6. Interview Discussion Points
 
-### "Walk us through your approach"
-Start with:
-1. Multi-account discovery (boto3 dynamic inventory)
-2. Data collection via SSM Run Command (why: auditable, agentless)
-3. Metrics aggregation to CloudWatch (why: native integration)
-4. Scalability via auto-tagging (why: self-service for ops teams)
-
-### "How do you handle security?"
-- Cross-account IAM roles with external IDs (protection against confused deputy)
-- Least-privilege IAM policies (only what's needed)
-- CloudTrail logging of all commands (compliance audit trail)
-- VPC endpoints for PrivateLink if needed (not required initially, but shows thinking)
-
-### "How does this scale?"
-- Boto3 pagination handles thousands of VMs
-- CloudWatch metrics auto-scale to millions of data points
-- Run Command parallelizes collection (minutes for 10k+ VMs)
-- Tagging strategy enables self-service (new teams add their own VMs)
-
-### "What's the rollout strategy?"
-- Phased: Pilot in Dev → Staging → Production
-- Start with subset of accounts (reduce risk)
-- Monitor CloudWatch metrics + agent health
-- After 2-4 weeks stability, expand to all accounts
-
-### "What would you do differently for Azure/GCP?"
-- **Azure:** Azure Monitor + Ansible tasks using `azure_rm_*` modules
-- **GCP:** Cloud Monitoring API + Ansible + gcloud CLI
-- (This shows you understand multi-cloud without over-complicating the answer)
-
----
-
-## 7. GitHub Repository Structure (What to Submit)
-
-Create a public repo with:
-- **README.md** → architecture overview, prerequisites, quick-start
-- **playbooks/** → production-ready YAML files
-- **roles/** → reusable Ansible roles
-- **docs/** → detailed design decisions, scaling considerations
-- **examples/** → sample outputs, CloudWatch dashboard exports
-- **.github/workflows/** (bonus) → CI/CD for playbook validation
-
----
-
-## 8. Pre-Interview Checklist
-
-- [ ] Understand Lucidity's product (cloud storage optimization, cost reduction, zero-downtime)
-- [ ] Refresh AWS IAM role chaining and cross-account access patterns
-- [ ] Understand Systems Manager Session Manager architecture
-- [ ] Practice explaining why *not* to buy a tool (vs. building)
-- [ ] Prepare 1-2 questions for the interviewer:
-  - "What's the typical size of customer environments you support?"
-  - "How do you approach multi-cloud strategies with customers?"
-  - "What are the most common integration patterns you see?"
-
----
 
 ## 9. Why This Solution Fits Lucidity's Philosophy
 
@@ -229,11 +172,3 @@ This mirrors how Lucidity sells its own product—as an intelligent, hands-off l
 
 ---
 
-## 10. Bonus: What If Asked About Lucidity's Product Integration?
-
-If they ask: *"How would you integrate Lucidity into this monitoring solution?"*
-
-Answer:
-"Lucidity's platform would be a *complementary* layer. While this solution provides reactive monitoring (alerting when disk is near-full), Lucidity's autonomous optimization would prevent the issue proactively—detecting wasteful volumes, auto-tiering, cleaning orphaned disks. Together, the two create a closed loop: Lucidity optimizes storage costs automatically, while this monitoring solution provides visibility and alerts for anomalies Lucidity can't solve (e.g., rapid app growth). They're partners, not competitors."
-
-This shows you understand the product and can think about solution architecture holistically.
