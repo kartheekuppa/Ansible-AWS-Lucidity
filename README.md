@@ -43,40 +43,26 @@ This solution addresses a common enterprise pain point: disk space monitoring ac
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ Discovery Phase                                         │
-│ ├─ Ansible runs aws_ec2_inventory.py                   │
-│ └─ boto3 discovers VMs with tag "monitoring=true"      │
-└──────────────┬──────────────────────────────────────────┘
-               │ (VM List)
-┌──────────────▼──────────────────────────────────────────┐
-│ Orchestration Phase (Ansible Control Node)             │
-│ ├─ For each discovered VM:                             │
-│ │  ├─ Assume cross-account IAM role                    │
-│ │  ├─ Call SSM SendCommand (df -h)                     │
-│ │  ├─ Wait for completion (async polling)              │
-│ │  ├─ Parse disk usage %                               │
-│ │  └─ Push to CloudWatch Metrics                       │
-│ └─ Handle retries, errors, logging                     │
-└──────────────┬──────────────────────────────────────────┘
-               │ (SSM Run Command)
-┌──────────────▼──────────────────────────────────────────┐
-│ Execution Phase (AWS Systems Manager)                   │
-│ ├─ Run "AWS-RunShellScript" document on each VM         │
-│ ├─ Execute: df -h | awk '{print $5}'                   │
-│ └─ Return: disk_usage_percent to Ansible               │
-└──────────────┬──────────────────────────────────────────┘
-               │ (Metrics)
-┌──────────────▼──────────────────────────────────────────┐
-│ Aggregation Phase (CloudWatch)                          │
-│ ├─ Store: DiskUsagePercent metric per VM               │
-│ ├─ Dimensions: InstanceId, Environment, Account        │
-│ ├─ Alarms:                                              │
-│ │  ├─ WARNING (70% usage) → SNS notification           │
-│ │  └─ CRITICAL (85% usage) → SNS notification          │
-│ └─ Retention: 30 days (configurable)                   │
-└─────────────────────────────────────────────────────────┘
+
+
+![Disk Monitoring Architecture](docs/images/architecture-diagram-lucidchart.png)
+
+**Architecture Overview:**
+- **Management Account** (pink): Ansible control node orchestrates discovery and execution
+- **Transit Gateway** (purple): Routes SSM Run Command traffic securely to child accounts
+- **Monitoring Account** (top right): Aggregates metrics and manages alarms
+- **Child Accounts A & B** (blue): Host EC2 instances with disk monitoring enabled
+
+**Data Flow:**
+1. Ansible discovers VMs via boto3 (tagged `monitoring=true`)
+2. For each VM, Ansible calls SSM Run Command
+3. SSM executes disk check (`df -h`) on the instance
+4. Output is parsed and pushed to CloudWatch
+5. Alarms trigger SNS notifications if thresholds exceeded
+
+See [detailed architecture](docs/ARCHITECTURE.md) for complete flow.
 ```
+
 
 ---
 
