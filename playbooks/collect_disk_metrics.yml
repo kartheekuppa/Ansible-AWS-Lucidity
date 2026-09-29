@@ -1,0 +1,236 @@
+---
+- name: Collect Disk Utilization Metrics Across Multi-Account AWS
+  hosts: all
+  gather_facts: no
+  vars:
+    aws_region: "{{ region }}"
+    external_id: "{{ lookup('env', 'AWS_EXTERNAL_ID') }}"
+    disk_warning_threshold: 70
+    disk_critical_threshold: 85
+    ssm_command_timeout: 300
+    ssm_command_max_retries: 10
+
+  tasks:
+    - name: "Debug: Instance info"
+      debug:
+        msg: "Collecting disk metrics for {{ inventory_hostname }} ({{ instance_id }})"
+      tags: [debug]
+
+    # ============================================================================
+    # DISCOVERY PHASE: Validate inventory & prepare for execution
+    # ============================================================================
+    - name: "Discovery: Validate instance has required variables"
+      assert:
+        that:
+          - instance_id is defined
+          - account_id is defined
+          - environment is defined
+        fail_msg: "Instance {{ inventory_hostname }} missing required variables"
+      tags: [discovery]
+
+    # ============================================================================
+    # EXECUTION PHASE: SSM SendCommand to execute disk check
+    # ============================================================================
+    - name: "Execution: SSM SendCommand - Get disk usage"
+      amazon.aws.ssm_send_command:
+        document_name: "AWS-RunShellScript"
+        instance_ids: ["{{ instance_id }}"]
+        parameters:
+          command:
+            - "df -h / | awk 'NR==2 {print $5}' | sed 's/%//'"
+        region: "{{ aws_region }}"
+      register: ssm_command
+      ignore_errors: yes
+      tags: [execution]
+
+    - name: "Execution: Check if SSM command failed"
+      debug:
+        msg: "SSM SendCommand failed for {{ instance_id }}"
+      when: ssm_command is failed
+      tags: [execution]
+
+    - name: "Execution: Set command ID from response"
+      set_fact:
+        command_id: "{{ ssm_command.command.command_id }}"
+      when: ssm_command is succeeded
+      tags: [execution]
+
+    - name: "Execution: Skip further processing if SSM command failed"
+      meta: end_host
+      when: ssm_command is failed
+      tags: [execution]
+
+    # ============================================================================
+    # WAIT PHASE: Poll for SSM command completion
+    # ============================================================================
+    - name: "Wait: Poll for SSM command completion"
+      amazon.aws.ssm_send_command:
+        region: "{{ aws_region }}"
+        wait: yes
+        wait_delay: 5
+        wait_timeout: "{{ ssm_command_timeout }}"
+        command_id: "{{ command_id }}"
+        instance_id: "{{ instance_id }}"
+      register: ssm_result
+      retries: "{{ ssm_command_max_retries }}"
+      delay: 5
+      until: ssm_result.command.status in ["Success", "Failed", "Cancelled"]
+      ignore_errors: yes
+      tags: [wait, execution]
+
+    - name: "Wait: Check if SSM command timed out"
+      debug:
+        msg: "SSM command {{ command_id }} timed out for instance {{ instance_id }}"
+      when: ssm_result is not succeeded or ssm_result.command.status != "Success"
+      tags: [wait]
+
+    - name: "Wait: Skip further processing if command failed"
+      meta: end_host
+      when: ssm_result.command.status != "Success"
+      tags: [wait]
+
+    # ============================================================================
+    # PARSING PHASE: Extract disk usage percentage from SSM output
+    # ============================================================================
+    - name: "Parse: Get command invocation details"
+      amazon.aws.ssm_get_command_invocation:
+        command_id: "{{ command_id }}"
+        instance_id: "{{ instance_id }}"
+        region: "{{ aws_region }}"
+      register: command_invocation
+      tags: [parse]
+
+    - name: "Parse: Extract disk usage percentage"
+      set_fact:
+        disk_usage_percent: "{{ command_invocation.standard_output_content | trim | int }}"
+      tags: [parse]
+
+    - name: "Parse: Validate disk usage value"
+      debug:
+        msg: "Disk usage for {{ instance_id }}: {{ disk_usage_percent }}%"
+      tags: [parse]
+
+    # ============================================================================
+    # AGGREGATION PHASE: Push metrics to CloudWatch
+    # ============================================================================
+    - name: "Aggregation: Push disk usage metric to CloudWatch"
+      amazon.aws.cloudwatch:
+        metric_name: "DiskUsagePercent"
+        namespace: "CustomMetrics"
+        value: "{{ disk_usage_percent }}"
+        unit: "Percent"
+        dimensions:
+          InstanceId: "{{ instance_id }}"
+          Environment: "{{ environment }}"
+          Account: "{{ account_id }}"
+        region: "{{ aws_region }}"
+      register: cloudwatch_result
+      ignore_errors: yes
+      tags: [aggregation, metrics]
+
+    - name: "Aggregation: Verify CloudWatch push succeeded"
+      debug:
+        msg: "Metric pushed to CloudWatch for {{ instance_id }}"
+      when: cloudwatch_result is succeeded
+      tags: [aggregation]
+
+    # ============================================================================
+    # ALERTING PHASE: Check thresholds and send SNS notification
+    # ============================================================================
+    - name: "Alert: Set alert level based on disk usage"
+      set_fact:
+        alert_level: "{{ 'CRITICAL' if disk_usage_percent | int >= disk_critical_threshold else ('WARNING' if disk_usage_percent | int >= disk_warning_threshold else 'OK') }}"
+      tags: [alert]
+
+    - name: "Alert: Send SNS notification if threshold exceeded"
+      amazon.aws.sns:
+        msg: |
+          Disk Usage Alert
+          ================
+          Instance ID: {{ instance_id }}
+          Hostname: {{ inventory_hostname }}
+          Environment: {{ environment }}
+          Account: {{ account_id }}
+          Region: {{ aws_region }}
+
+          Current Disk Usage: {{ disk_usage_percent }}%
+          Alert Level: {{ alert_level }}
+          Threshold: {{ disk_critical_threshold }}% (critical), {{ disk_warning_threshold }}% (warning)
+
+          Time: {{ ansible_date_time.iso8601 if ansible_date_time is defined else 'unknown' }}
+        subject: "[{{ alert_level }}] Disk Usage Alert - {{ instance_id }}"
+        topic: "arn:aws:sns:{{ aws_region }}:{{ account_id }}:DiskUsageAlerts"
+        region: "{{ aws_region }}"
+      when: alert_level != "OK"
+      ignore_errors: yes
+      tags: [alert]
+
+    # ============================================================================
+    # LOGGING PHASE: Log results to CloudWatch Logs
+    # ============================================================================
+    - name: "Logging: Log metrics collection to CloudWatch Logs"
+      debug:
+        msg: |
+          Instance: {{ instance_id }} ({{ inventory_hostname }})
+          Environment: {{ environment }}
+          Account: {{ account_id }}
+          Region: {{ aws_region }}
+          Disk Usage: {{ disk_usage_percent }}%
+          Alert Level: {{ alert_level }}
+          Status: SUCCESS
+      tags: [logging]
+
+    - name: "Logging: Record in local log file"
+      lineinfile:
+        path: "/tmp/disk_metrics_{{ ansible_date_time.date | default('unknown') }}.log"
+        line: "{{ ansible_date_time.iso8601 | default('') }} | {{ instance_id }} | {{ environment }} | {{ account_id }} | {{ disk_usage_percent }}% | {{ alert_level }}"
+        create: yes
+      delegate_to: localhost
+      become: no
+      ignore_errors: yes
+      tags: [logging]
+
+  # ============================================================================
+  # ERROR HANDLING
+  # ============================================================================
+  rescue:
+    - name: "Error: Log failure"
+      debug:
+        msg: "Error collecting disk metrics for {{ instance_id }}: {{ ansible_failed_result }}"
+      tags: [error]
+
+    - name: "Error: Send SNS alert on failure"
+      amazon.aws.sns:
+        msg: |
+          Disk Collection Failed
+          =====================
+          Instance ID: {{ instance_id }}
+          Environment: {{ environment }}
+          Account: {{ account_id }}
+
+          Error: Collection process failed
+
+          Please check Ansible logs and SSM command history for details.
+        subject: "[ERROR] Disk Metrics Collection Failed - {{ instance_id }}"
+        topic: "arn:aws:sns:{{ aws_region }}:{{ account_id }}:DiskUsageAlerts"
+        region: "{{ aws_region }}"
+      when: account_id is defined
+      ignore_errors: yes
+      tags: [error, alert]
+
+# ============================================================================
+# SUMMARY TASKS
+# ============================================================================
+- name: Summary - Disk Metrics Collection
+  hosts: localhost
+  gather_facts: yes
+  tasks:
+    - name: "Summary: Report collection statistics"
+      debug:
+        msg: |
+          Disk Metrics Collection Complete
+          =================================
+          Time: {{ ansible_date_time.iso8601 }}
+          Targets: {{ groups['all'] | length }} instances
+          Duration: {{ (ansible_date_time.epoch | int) - (ansible_start_time | int) }}s
+      tags: [summary]
