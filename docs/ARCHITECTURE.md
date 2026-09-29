@@ -97,25 +97,7 @@
 
 ---
 
-## 4. Key Design Decisions to Articulate in Interview
 
-### Why NOT 3rd-Party Tools (Yet)?
-- **Cost:** Licensing per-VM adds up quickly at scale
-- **Leverage existing:** Ansible already in place, team knows it
-- **Time to value:** Weeks, not months
-- **Data ownership:** Metrics stay in AWS, no vendor lock-in risk
-
-### Why AWS Systems Manager (Not SSH)?
-- **Agentless on Windows** → no additional tooling
-- **IAM-native authentication** → no SSH key management
-- **Audit trail** → CloudTrail logs every command
-- **Firewall-friendly** → uses HTTPS only, no open ports
-
-### Why CloudWatch (Not External Time-Series DB)?
-- **Native integration** → no additional infrastructure
-- **Cost-effective** → ~$0.30/custom metric/month (cheaper than self-hosted)
-- **Real-time alerting** → SNS integration immediate
-- **Compliance** → 15-month retention built-in
 
 ---
 
